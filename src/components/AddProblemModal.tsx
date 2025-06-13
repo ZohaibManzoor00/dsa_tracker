@@ -35,9 +35,7 @@ export function AddProblemModal({
 
   // Get 3 random problems from the list, only when modal opens
   const randomProblems = useMemo(() => {
-    return [...neetcodeProblems]
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 3);
+    return [...neetcodeProblems].sort(() => Math.random() - 0.5).slice(0, 3);
   }, [isOpen]); // Only re-randomize when modal opens/closes
 
   const isProblemAdded = (problemTitle: string) => {
