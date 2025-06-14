@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import {
   Sheet,
   SheetContent,
@@ -16,6 +16,7 @@ import {
   getTopicColor,
   getStatusColor,
 } from "@/lib/color-matching";
+import { KeyedMutator } from "swr";
 
 interface Problem {
   id: string;
@@ -50,15 +51,18 @@ export function ProblemDetailSheet({
   problem,
   onSave,
   onClose,
+  mutate,
 }: {
   problem: ProblemWithUserData;
   onSave: (problem: ProblemWithUserData) => void;
   onClose: () => void;
+  mutate: KeyedMutator<ProblemWithUserData[]>;
 }) {
   const [notes, setNotes] = useState(problem.userProblem.notes || "");
   const [showDifficulty, setShowDifficulty] = useState(false);
   const [showCategory, setShowCategory] = useState(false);
   const [rating, setRating] = useState(problem.userProblem.rating || 7);
+  const [isPending, startTransition] = useTransition();
   const [lastAttempt, setLastAttempt] = useState(
     problem.userProblem.lastAttempt || ""
   );
@@ -100,19 +104,54 @@ export function ProblemDetailSheet({
   };
 
   const handleRatingChange = async (value: number) => {
-    try {
-      // Update the rating in the database
-      await fetch(`/api/problems/${problem.problem.slug}/rating`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ rating: value }),
-      });
-      setRating(value);
-    } catch (error) {
-      console.error("Failed to update rating:", error);
-    }
+    // Optimistically update the UI
+    setRating(value);
+
+    // Optimistically update the table view
+    mutate((currentProblems) => {
+      if (!currentProblems) return currentProblems;
+      return currentProblems.map((p) =>
+        p.problem.id === problem.problem.id
+          ? {
+              ...p,
+              userProblem: { ...p.userProblem, rating: value },
+            }
+          : p
+      );
+    }, false);
+
+    // Start a transition for the API call
+    startTransition(async () => {
+      try {
+        await fetch(`/api/problems/${problem.problem.slug}/rating`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ rating: value }),
+        });
+        // Revalidate after successful update
+        mutate();
+      } catch (error) {
+        console.error("Failed to update rating:", error);
+        // Revert the optimistic update if the API call fails
+        setRating(problem.userProblem.rating || 7);
+        mutate((currentProblems) => {
+          if (!currentProblems) return currentProblems;
+          return currentProblems.map((p) =>
+            p.problem.id === problem.problem.id
+              ? {
+                  ...p,
+                  userProblem: {
+                    ...p.userProblem,
+                    rating: problem.userProblem.rating || 7,
+                  },
+                }
+              : p
+          );
+        }, false);
+      }
+    });
   };
 
   const handleSave = () => {

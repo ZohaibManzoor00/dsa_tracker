@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useTracker } from "@/hooks/use-tracker";
 import {
   Card,
@@ -91,6 +91,7 @@ interface ProblemWithUserData {
 
 export function TrackerTable() {
   const { problems, isLoading, error, mutate } = useTracker();
+  const [isPending, startTransition] = useTransition();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [leetcodeUrl, setLeetcodeUrl] = useState("");
   const [groupBy, setGroupBy] = useState<
@@ -181,31 +182,60 @@ export function TrackerTable() {
       return;
     }
 
-    try {
-      // Find the problem to get its slug
-      const problem = (problems as ProblemWithUserData[]).find(
-        (p) => p.problem.id === problemId
-      );
+    // Find the problem to get its slug
+    const problem = (problems as ProblemWithUserData[]).find(
+      (p) => p.problem.id === problemId
+    );
 
-      if (!problem) {
-        console.error("Problem not found");
-        return;
-      }
-
-      // Update the rating in the database
-      await fetch(`/api/problems/${problem.problem.slug}/rating`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ rating: numValue }),
-      });
-
-      // Update the local state
-      mutate();
-    } catch (error) {
-      console.error("Failed to update rating:", error);
+    if (!problem) {
+      console.error("Problem not found");
+      return;
     }
+
+    // Optimistically update the UI
+    mutate((currentProblems) => {
+      if (!currentProblems) return currentProblems;
+      return currentProblems.map((p) =>
+        p.problem.id === problemId
+          ? {
+              ...p,
+              userProblem: { ...p.userProblem, rating: numValue },
+            }
+          : p
+      );
+    }, false);
+
+    // Start a transition for the API call
+    startTransition(async () => {
+      try {
+        await fetch(`/api/problems/${problem.problem.slug}/rating`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ rating: numValue }),
+        });
+        // Revalidate after successful update
+        mutate();
+      } catch (error) {
+        console.error("Failed to update rating:", error);
+        // Revert the optimistic update if the API call fails
+        mutate((currentProblems) => {
+          if (!currentProblems) return currentProblems;
+          return currentProblems.map((p) =>
+            p.problem.id === problemId
+              ? {
+                  ...p,
+                  userProblem: {
+                    ...p.userProblem,
+                    rating: p.userProblem.rating || 7,
+                  },
+                }
+              : p
+          );
+        }, false);
+      }
+    });
   };
 
   const handleSaveProblem = async (updatedProblem: any) => {
@@ -507,7 +537,9 @@ export function TrackerTable() {
                                       setEditingRating(null);
                                     }
                                   }}
-                                  className="w-8 h-6 text-sm px-0.5 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 m-0"
+                                  className={`w-8 h-6 text-sm px-0.5 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 m-0 transition-opacity duration-200 ${
+                                    isPending ? "opacity-50" : "opacity-100"
+                                  }`}
                                   autoFocus
                                 />
                                 <span className="text-xs text-gray-400">
@@ -516,13 +548,14 @@ export function TrackerTable() {
                               </div>
                             ) : (
                               <div
-                                className="flex items-center gap-0.5 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5"
+                                className={`flex items-center gap-0.5 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5 transition-opacity duration-200 ${
+                                  isPending ? "opacity-50" : "opacity-100"
+                                }`}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setEditingRating({
                                     id: item.problem.id,
-                                    value:
-                                      item.userProblem.rating?.toString() || "",
+                                    value: "",
                                   });
                                 }}
                               >
@@ -705,6 +738,7 @@ export function TrackerTable() {
             problem={selectedProblem}
             onSave={handleSaveProblem}
             onClose={handleCloseSheet}
+            mutate={mutate}
           />
         )}
       </Sheet>
