@@ -42,8 +42,9 @@ export async function GET(
 
 export async function PUT(
   request: Request,
-  { params }: { params: { slug: string } }
+  context: { params: { slug: string } }
 ) {
+  const { params } = context;
   try {
     const { userId } = await auth();
     if (!userId) {

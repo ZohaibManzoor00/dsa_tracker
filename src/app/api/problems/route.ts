@@ -23,7 +23,8 @@ export async function GET(request: Request) {
         })
         .from(userProblems)
         .innerJoin(problems, eq(userProblems.problemId, problems.id))
-        .where(eq(userProblems.userId, userId));
+        .where(eq(userProblems.userId, userId))
+        .orderBy(userProblems.createdAt);
 
       return NextResponse.json(userProblemsData);
     }

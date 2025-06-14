@@ -59,6 +59,14 @@ import {
 import { AddProblemModal } from "@/components/AddProblemModal";
 import { Sheet } from "./ui/sheet";
 import { ProblemDetailSheet } from "./ProblemDetailSheet";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { format } from "date-fns";
+import { CalendarIcon } from "lucide-react";
 
 interface Problem {
   id: string;
@@ -89,6 +97,27 @@ interface ProblemWithUserData {
   userProblem: UserProblem;
 }
 
+const STATUS_OPTIONS = [
+  "Not Started",
+  "In Progress",
+  "Stuck",
+  "Partial Solution",
+  "Completed",
+  "Needs Optimization",
+  "Revisit",
+];
+
+// Utility to format status for display
+function formatStatus(status: string) {
+  // Convert snake_case or lowercase to Title Case
+  return status
+    .replace(/_/g, " ")
+    .replace(
+      /\w\S*/g,
+      (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()
+    );
+}
+
 export function TrackerTable() {
   const { problems, isLoading, error, mutate } = useTracker();
   const [isPending, startTransition] = useTransition();
@@ -110,6 +139,11 @@ export function TrackerTable() {
     id: string;
     value: string;
   } | null>(null);
+  const [editingDate, setEditingDate] = useState<{
+    id: string;
+    value: Date | undefined;
+  } | null>(null);
+  const [editingStatus, setEditingStatus] = useState<string | null>(null);
 
   const filteredProblems = (problems as ProblemWithUserData[]).filter(
     (item: ProblemWithUserData) => {
@@ -229,6 +263,122 @@ export function TrackerTable() {
                   userProblem: {
                     ...p.userProblem,
                     rating: p.userProblem.rating || 7,
+                  },
+                }
+              : p
+          );
+        }, false);
+      }
+    });
+  };
+
+  const handleDateChange = async (
+    problemId: string,
+    date: Date | undefined
+  ) => {
+    // Find the problem to get its slug
+    const problem = (problems as ProblemWithUserData[]).find(
+      (p) => p.problem.id === problemId
+    );
+
+    if (!problem) {
+      console.error("Problem not found");
+      return;
+    }
+
+    // Optimistically update the UI
+    mutate((currentProblems) => {
+      if (!currentProblems) return currentProblems;
+      return currentProblems.map((p) =>
+        p.problem.id === problemId
+          ? {
+              ...p,
+              userProblem: {
+                ...p.userProblem,
+                lastAttempt: date?.toISOString() || null,
+              },
+            }
+          : p
+      );
+    }, false);
+
+    // Start a transition for the API call
+    startTransition(async () => {
+      try {
+        await fetch(`/api/problems/${problem.problem.slug}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ lastAttempt: date?.toISOString() || null }),
+        });
+        // Revalidate after successful update
+        mutate();
+      } catch (error) {
+        console.error("Failed to update date:", error);
+        // Revert the optimistic update if the API call fails
+        mutate((currentProblems) => {
+          if (!currentProblems) return currentProblems;
+          return currentProblems.map((p) =>
+            p.problem.id === problemId
+              ? {
+                  ...p,
+                  userProblem: {
+                    ...p.userProblem,
+                    lastAttempt: p.userProblem.lastAttempt,
+                  },
+                }
+              : p
+          );
+        }, false);
+      }
+    });
+  };
+
+  const handleStatusChange = async (problemId: string, newStatus: string) => {
+    // Find the problem to get its slug
+    const problem = (problems as ProblemWithUserData[]).find(
+      (p) => p.problem.id === problemId
+    );
+    if (!problem) {
+      console.error("Problem not found");
+      return;
+    }
+    // Optimistically update the UI
+    mutate((currentProblems) => {
+      if (!currentProblems) return currentProblems;
+      return currentProblems.map((p) =>
+        p.problem.id === problemId
+          ? {
+              ...p,
+              userProblem: { ...p.userProblem, status: newStatus },
+            }
+          : p
+      );
+    }, false);
+    // Start a transition for the API call
+    startTransition(async () => {
+      try {
+        await fetch(`/api/problems/${problem.problem.slug}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        mutate();
+      } catch (error) {
+        console.error("Failed to update status:", error);
+        // Revert the optimistic update if the API call fails
+        mutate((currentProblems) => {
+          if (!currentProblems) return currentProblems;
+          return currentProblems.map((p) =>
+            p.problem.id === problemId
+              ? {
+                  ...p,
+                  userProblem: {
+                    ...p.userProblem,
+                    status: problem.userProblem.status,
                   },
                 }
               : p
@@ -457,7 +607,9 @@ export function TrackerTable() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="border-r">Problem</TableHead>
+                        <TableHead className="border-r w-[700px]">
+                          Problem
+                        </TableHead>
                         <TableHead>Difficulty</TableHead>
                         <TableHead>Topic</TableHead>
                         <TableHead>Status</TableHead>
@@ -472,7 +624,7 @@ export function TrackerTable() {
                           className="hover:bg-gray-50 cursor-pointer"
                           onClick={(e) => handleProblemClick(item, e)}
                         >
-                          <TableCell className="font-medium border-r">
+                          <TableCell className="font-medium border-r w-[700px]">
                             {item.problem.title}
                           </TableCell>
                           <TableCell>
@@ -493,13 +645,56 @@ export function TrackerTable() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              className={getStatusColor(
-                                item.userProblem.status
+                            <div className="relative w-[200px] min-h-[40px] flex items-center">
+                              <div
+                                className={`flex items-center gap-1 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5 transition-opacity duration-200 ${
+                                  isPending ? "opacity-50" : "opacity-100"
+                                }`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingStatus(item.problem.id);
+                                }}
+                                style={{ width: "100%" }}
+                              >
+                                <Badge
+                                  className={getStatusColor(
+                                    item.userProblem.status
+                                  )}
+                                >
+                                  {formatStatus(item.userProblem.status)}
+                                </Badge>
+                              </div>
+                              {editingStatus === item.problem.id && (
+                                <div className="absolute left-0 top-0 w-full z-50">
+                                  <Select
+                                    value={item.userProblem.status}
+                                    onValueChange={(value) => {
+                                      handleStatusChange(
+                                        item.problem.id,
+                                        value
+                                      );
+                                      setEditingStatus(null);
+                                    }}
+                                    open
+                                    onOpenChange={(open) => {
+                                      if (!open) setEditingStatus(null);
+                                    }}
+                                  >
+                                    <SelectTrigger className="sr-only" />
+                                    <SelectContent className="z-50 w-[200px]">
+                                      {STATUS_OPTIONS.filter(
+                                        (status) =>
+                                          status !== item.userProblem.status
+                                      ).map((status) => (
+                                        <SelectItem key={status} value={status}>
+                                          {formatStatus(status)}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               )}
-                            >
-                              {item.userProblem.status}
-                            </Badge>
+                            </div>
                           </TableCell>
                           <TableCell>
                             {editingRating?.id === item.problem.id ? (
@@ -577,11 +772,53 @@ export function TrackerTable() {
                             )}
                           </TableCell>
                           <TableCell className="text-sm text-gray-600">
-                            {item.userProblem.lastAttempt
-                              ? new Date(
-                                  item.userProblem.lastAttempt
-                                ).toLocaleDateString()
-                              : "Never"}
+                            <div className="relative">
+                              <Popover
+                                open={editingDate?.id === item.problem.id}
+                                onOpenChange={(open) =>
+                                  !open && setEditingDate(null)
+                                }
+                              >
+                                <PopoverTrigger asChild>
+                                  <div
+                                    className={`flex items-center gap-0.5 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5 transition-opacity duration-200 ${
+                                      isPending ? "opacity-50" : "opacity-100"
+                                    }`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingDate({
+                                        id: item.problem.id,
+                                        value: item.userProblem.lastAttempt
+                                          ? new Date(
+                                              item.userProblem.lastAttempt
+                                            )
+                                          : undefined,
+                                      });
+                                    }}
+                                  >
+                                    {item.userProblem.lastAttempt
+                                      ? new Date(
+                                          item.userProblem.lastAttempt
+                                        ).toLocaleDateString()
+                                      : "Click to set date"}
+                                  </div>
+                                </PopoverTrigger>
+                                <PopoverContent
+                                  className="w-auto p-0"
+                                  align="start"
+                                >
+                                  <Calendar
+                                    mode="single"
+                                    selected={editingDate?.value}
+                                    onSelect={(date) => {
+                                      handleDateChange(item.problem.id, date);
+                                      setEditingDate(null);
+                                    }}
+                                    initialFocus
+                                  />
+                                </PopoverContent>
+                              </Popover>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -702,7 +939,7 @@ export function TrackerTable() {
                           <Badge
                             className={getStatusColor(item.userProblem.status)}
                           >
-                            {item.userProblem.status}
+                            {formatStatus(item.userProblem.status)}
                           </Badge>
                         </TableCell>
                         <TableCell>
