@@ -20,7 +20,24 @@ export async function getProblemBySlug(slug: string) {
       .where(eq(problems.slug, slug))
       .limit(1);
 
-    return { data: problem[0], error: null };
+    if (!problem[0]) {
+      return { data: null, error: "Problem not found" };
+    }
+
+    // Parse JSON fields
+    const parsedProblem = {
+      ...problem[0],
+      examples:
+        typeof problem[0].examples === "string"
+          ? JSON.parse(problem[0].examples)
+          : problem[0].examples,
+      constraints:
+        typeof problem[0].constraints === "string"
+          ? JSON.parse(problem[0].constraints)
+          : problem[0].constraints,
+    };
+
+    return { data: parsedProblem, error: null };
   } catch (error) {
     console.error("Error fetching problem:", error);
     return { data: null, error: "Failed to fetch problem" };

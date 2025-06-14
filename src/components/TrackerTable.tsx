@@ -57,6 +57,8 @@ import {
   getStatusColor,
 } from "@/lib/color-matching";
 import { AddProblemModal } from "@/components/AddProblemModal";
+import { Sheet } from "./ui/sheet";
+import { ProblemDetailSheet } from "./ProblemDetailSheet";
 
 interface Problem {
   id: string;
@@ -64,6 +66,11 @@ interface Problem {
   difficulty: string;
   topic: string;
   url: string;
+  description: string;
+  examples: any[];
+  constraints: string[];
+  starterCode: string;
+  slug: string;
 }
 
 interface UserProblem {
@@ -74,6 +81,7 @@ interface UserProblem {
   lastAttempt: string | null;
   notes: string | null;
   code: string | null;
+  rating: number | null;
 }
 
 interface ProblemWithUserData {
@@ -85,7 +93,9 @@ export function TrackerTable() {
   const { problems, isLoading, error, mutate } = useTracker();
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [leetcodeUrl, setLeetcodeUrl] = useState("");
-  const [groupBy, setGroupBy] = useState("none");
+  const [groupBy, setGroupBy] = useState<
+    "none" | "difficulty" | "topic" | "status"
+  >("none");
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("my-problems");
   const [searchTerm, setSearchTerm] = useState("");
@@ -95,6 +105,10 @@ export function TrackerTable() {
   const [selectedProblem, setSelectedProblem] =
     useState<ProblemWithUserData | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const [editingRating, setEditingRating] = useState<{
+    id: string;
+    value: string;
+  } | null>(null);
 
   const filteredProblems = (problems as ProblemWithUserData[]).filter(
     (item: ProblemWithUserData) => {
@@ -115,9 +129,24 @@ export function TrackerTable() {
     }
   );
 
-  const handleProblemClick = (problem: ProblemWithUserData) => {
-    setSelectedProblem(problem);
-    setIsSheetOpen(true);
+  const handleProblemClick = (
+    problem: ProblemWithUserData,
+    event: React.MouseEvent
+  ) => {
+    const target = event.target as HTMLElement;
+    const cell = target.closest("td");
+    if (!cell) return;
+
+    // Get the index of the clicked cell
+    const cellIndex = Array.from(cell.parentElement?.children || []).indexOf(
+      cell
+    );
+
+    // If clicked on the problem name cell (index 0)
+    if (cellIndex === 0) {
+      setSelectedProblem(problem);
+      setIsSheetOpen(true);
+    }
   };
 
   const groupedProblems = () => {
@@ -145,6 +174,67 @@ export function TrackerTable() {
     );
   };
 
+  const handleRatingChange = async (problemId: string, value: string) => {
+    // Only allow numbers between 1-10
+    const numValue = parseInt(value);
+    if (isNaN(numValue) || numValue < 1 || numValue > 10) {
+      return;
+    }
+
+    try {
+      // Find the problem to get its slug
+      const problem = (problems as ProblemWithUserData[]).find(
+        (p) => p.problem.id === problemId
+      );
+
+      if (!problem) {
+        console.error("Problem not found");
+        return;
+      }
+
+      // Update the rating in the database
+      await fetch(`/api/problems/${problem.problem.slug}/rating`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rating: numValue }),
+      });
+
+      // Update the local state
+      mutate();
+    } catch (error) {
+      console.error("Failed to update rating:", error);
+    }
+  };
+
+  const handleSaveProblem = async (updatedProblem: any) => {
+    try {
+      await fetch(`/api/problems/${updatedProblem.problem.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(updatedProblem),
+      });
+      mutate();
+      setIsSheetOpen(false);
+    } catch (error) {
+      console.error("Failed to update problem:", error);
+    }
+  };
+
+  const handleCloseSheet = () => {
+    setIsSheetOpen(false);
+    setSelectedProblem(null);
+  };
+
+  const handleGroupByChange = (
+    value: "none" | "difficulty" | "topic" | "status"
+  ) => {
+    setGroupBy(value);
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -164,17 +254,17 @@ export function TrackerTable() {
     );
   }
 
-  if ((problems as ProblemWithUserData[]).length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[400px] space-y-4">
-        <p className="text-gray-500">No problems added yet.</p>
-        <Button onClick={() => setIsAddModalOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Add Your First Problem
-        </Button>
-      </div>
-    );
-  }
+  // if ((problems as ProblemWithUserData[]).length === 0) {
+  //   return (
+  //     <div className="flex flex-col items-center justify-center h-[400px] space-y-4">
+  //       <p className="text-gray-500">No problems added yet.</p>
+  //       <Button onClick={() => setIsAddModalOpen(true)}>
+  //         <Plus className="w-4 h-4 mr-2" />
+  //         Add Your First Problem
+  //       </Button>
+  //     </div>
+  //   );
+  // }
 
   return (
     <Tabs
@@ -204,7 +294,7 @@ export function TrackerTable() {
               </div>
               <div className="flex items-center gap-2">
                 {/* Group By Selector */}
-                <Select value={groupBy} onValueChange={setGroupBy}>
+                <Select value={groupBy} onValueChange={handleGroupByChange}>
                   <SelectTrigger className="w-32">
                     <SelectValue />
                   </SelectTrigger>
@@ -337,10 +427,11 @@ export function TrackerTable() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Problem</TableHead>
+                        <TableHead className="border-r">Problem</TableHead>
                         <TableHead>Difficulty</TableHead>
                         <TableHead>Topic</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead>Rating</TableHead>
                         <TableHead>Last Attempt</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -349,9 +440,9 @@ export function TrackerTable() {
                         <TableRow
                           key={item.problem.id}
                           className="hover:bg-gray-50 cursor-pointer"
-                          onClick={() => handleProblemClick(item)}
+                          onClick={(e) => handleProblemClick(item, e)}
                         >
-                          <TableCell className="font-medium">
+                          <TableCell className="font-medium border-r">
                             {item.problem.title}
                           </TableCell>
                           <TableCell>
@@ -379,6 +470,78 @@ export function TrackerTable() {
                             >
                               {item.userProblem.status}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {editingRating?.id === item.problem.id ? (
+                              <div className="flex items-center">
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  value={editingRating.value}
+                                  onChange={(e) =>
+                                    setEditingRating({
+                                      id: item.problem.id,
+                                      value: e.target.value,
+                                    })
+                                  }
+                                  onBlur={() => {
+                                    if (editingRating) {
+                                      handleRatingChange(
+                                        item.problem.id,
+                                        editingRating.value
+                                      );
+                                      setEditingRating(null);
+                                    }
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      if (editingRating) {
+                                        handleRatingChange(
+                                          item.problem.id,
+                                          editingRating.value
+                                        );
+                                        setEditingRating(null);
+                                      }
+                                    } else if (e.key === "Escape") {
+                                      setEditingRating(null);
+                                    }
+                                  }}
+                                  className="w-8 h-6 text-sm px-0.5 border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 p-0 m-0"
+                                  autoFocus
+                                />
+                                <span className="text-xs text-gray-400">
+                                  /10
+                                </span>
+                              </div>
+                            ) : (
+                              <div
+                                className="flex items-center gap-0.5 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingRating({
+                                    id: item.problem.id,
+                                    value:
+                                      item.userProblem.rating?.toString() || "",
+                                  });
+                                }}
+                              >
+                                {item.userProblem.rating ? (
+                                  <>
+                                    <span className="text-sm font-medium">
+                                      {item.userProblem.rating}
+                                    </span>
+                                    <span className="text-xs text-gray-400">
+                                      /10
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-sm text-gray-400">
+                                    Click to rate
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-sm text-gray-600">
                             {item.userProblem.lastAttempt
@@ -513,7 +676,7 @@ export function TrackerTable() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleProblemClick(item)}
+                            onClick={(e) => handleProblemClick(item, e)}
                           >
                             Edit
                           </Button>
@@ -534,6 +697,17 @@ export function TrackerTable() {
         onOpenChange={setIsAddModalOpen}
         onProblemAdded={mutate}
       />
+
+      {/* Problem Detail Sheet */}
+      <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
+        {selectedProblem && (
+          <ProblemDetailSheet
+            problem={selectedProblem}
+            onSave={handleSaveProblem}
+            onClose={handleCloseSheet}
+          />
+        )}
+      </Sheet>
     </Tabs>
   );
 }

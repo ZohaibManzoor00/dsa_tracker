@@ -41,13 +41,39 @@ export async function POST(request: Request) {
   try {
     const { userId } = await auth();
     if (!userId) {
+      console.error("Unauthorized: No userId found");
       return new NextResponse("Unauthorized", { status: 401 });
     }
 
     const body = await request.json();
-    const { title, difficulty, topic, url } = body;
+    console.log("Received problem data:", {
+      title: body.title,
+      difficulty: body.difficulty,
+      topic: body.topic,
+      hasDescription: !!body.description,
+      hasExamples: !!body.examples,
+      hasConstraints: !!body.constraints,
+      hasStarterCode: !!body.starterCode,
+    });
+
+    const {
+      title,
+      difficulty,
+      topic,
+      url,
+      description,
+      examples,
+      constraints,
+      starterCode,
+    } = body;
 
     if (!title || !difficulty || !topic || !url) {
+      console.error("Missing required fields:", {
+        title,
+        difficulty,
+        topic,
+        url,
+      });
       return new NextResponse("Missing required fields", { status: 400 });
     }
 
@@ -55,8 +81,10 @@ export async function POST(request: Request) {
     const slug =
       url.split("/problems/")[1]?.replace(/\/$/, "") ||
       title.toLowerCase().replace(/\s+/g, "-");
+    console.log("Extracted slug:", slug);
 
     // First, check if the problem already exists by URL
+    console.log("Checking for existing problem by URL...");
     const existingProblem = await db
       .select()
       .from(problems)
@@ -65,10 +93,12 @@ export async function POST(request: Request) {
 
     let problemId;
     if (existingProblem.length > 0) {
+      console.log("Found existing problem by URL:", existingProblem[0].id);
       problemId = existingProblem[0].id;
     } else {
       try {
-        // Create new problem
+        console.log("Creating new problem...");
+        // Create new problem with all the details from LeetCode
         const [newProblem] = await db
           .insert(problems)
           .values({
@@ -77,16 +107,21 @@ export async function POST(request: Request) {
             difficulty,
             topic,
             url,
-            description: "",
-            examples: [],
-            constraints: [],
-            starterCode: "",
+            description: description || "",
+            examples: examples || "[]",
+            constraints: constraints || "[]",
+            starterCode: starterCode || "",
           })
           .returning();
+        console.log("Created new problem:", newProblem.id);
         problemId = newProblem.id;
       } catch (error: any) {
+        console.error("Error creating problem:", error);
         // If we get a duplicate error, try to find the existing problem by slug
         if (error.message?.includes("duplicate key")) {
+          console.log(
+            "Duplicate key error, checking for existing problem by slug..."
+          );
           const existingProblem = await db
             .select()
             .from(problems)
@@ -94,8 +129,15 @@ export async function POST(request: Request) {
             .limit(1);
 
           if (existingProblem.length > 0) {
+            console.log(
+              "Found existing problem by slug:",
+              existingProblem[0].id
+            );
             problemId = existingProblem[0].id;
           } else {
+            console.error(
+              "No existing problem found despite duplicate key error"
+            );
             return new NextResponse(`"${title}" is already in your list`, {
               status: 400,
             });
@@ -107,6 +149,7 @@ export async function POST(request: Request) {
     }
 
     // Check if user already has this problem
+    console.log("Checking if user already has this problem...");
     const existingUserProblem = await db
       .select()
       .from(userProblems)
@@ -119,12 +162,14 @@ export async function POST(request: Request) {
       .limit(1);
 
     if (existingUserProblem.length > 0) {
+      console.log("User already has this problem");
       return new NextResponse(`"${title}" is already in your list`, {
         status: 400,
       });
     }
 
     // Add problem to user's list
+    console.log("Adding problem to user's list...");
     const [userProblem] = await db
       .insert(userProblems)
       .values({
@@ -136,8 +181,10 @@ export async function POST(request: Request) {
         lastAttempt: null,
       })
       .returning();
+    console.log("Added problem to user's list:", userProblem.id);
 
     // Return the complete problem data
+    console.log("Fetching complete problem data...");
     const [completeProblem] = await db
       .select({
         problem: problems,
@@ -147,11 +194,22 @@ export async function POST(request: Request) {
       .innerJoin(problems, eq(userProblems.problemId, problems.id))
       .where(eq(userProblems.id, userProblem.id));
 
+    console.log("Successfully saved problem:", {
+      problemId: completeProblem.problem.id,
+      title: completeProblem.problem.title,
+      userId: completeProblem.userProblem.userId,
+      hasDescription: !!completeProblem.problem.description,
+      hasExamples: !!completeProblem.problem.examples,
+      hasConstraints: !!completeProblem.problem.constraints,
+      hasStarterCode: !!completeProblem.problem.starterCode,
+    });
+
     return NextResponse.json(completeProblem);
   } catch (error: any) {
-    // In case of any error, return a generic message since we might not have access to the title
-    return new NextResponse("Problem already exists in your list", {
-      status: 400,
-    });
+    console.error("Error in problems POST route:", error);
+    return new NextResponse(
+      error instanceof Error ? error.message : "Failed to save problem",
+      { status: 500 }
+    );
   }
 }

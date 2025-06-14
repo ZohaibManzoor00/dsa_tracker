@@ -7,6 +7,11 @@ interface Problem {
   difficulty: string;
   topic: string;
   url: string;
+  slug: string;
+  description: string;
+  examples: any[];
+  constraints: string[];
+  starterCode: string;
 }
 
 interface UserProblem {
@@ -17,6 +22,7 @@ interface UserProblem {
   lastAttempt: string | null;
   notes: string | null;
   code: string | null;
+  rating: number | null;
 }
 
 interface ProblemWithUserData {

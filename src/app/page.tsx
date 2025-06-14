@@ -9,7 +9,7 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { auth } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 import { AuthButtons } from "@/components/auth-buttons";
 
 export default function Home() {
