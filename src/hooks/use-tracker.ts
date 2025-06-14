@@ -32,6 +32,7 @@ interface ProblemWithUserData {
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json());
 
+export type { Problem, ProblemWithUserData };
 export function useTracker() {
   const { userId } = useAuth();
 

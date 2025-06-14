@@ -205,12 +205,18 @@ export function AddProblemModal({
     try {
       setIsLoading(true);
 
+      // Ensure the problem has a URL
+      const problemWithUrl = {
+        ...problem,
+        url: problem.url || `https://leetcode.com/problems/${problem.slug}/`,
+      };
+
       const response = await fetch("/api/problems", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(problem),
+        body: JSON.stringify(problemWithUrl),
       });
 
       if (!response.ok) {
@@ -248,6 +254,7 @@ export function AddProblemModal({
       toast.success("Problem added successfully");
       onProblemAdded();
       setLeetcodeUrl(""); // Clear the URL input
+      // Do NOT close the modal here
     } catch (error) {
       console.error("Caught error:", error);
       toast.error("Failed to add problem");
@@ -552,7 +559,7 @@ export function AddProblemModal({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => handleAddFromSlug(problem.slug)}
+                    onClick={() => handleAddProblem(problem)}
                     disabled={alreadyAdded || isLoading}
                   >
                     {alreadyAdded ? (

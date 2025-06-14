@@ -6,20 +6,45 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { CheckCircle, Clock, TrendingUp } from "lucide-react";
+import { useTracker } from "@/hooks/use-tracker";
+import { useEffect } from "react";
 
-// Progress data for the line graph
-const progressData = [
-  { milestone: "Beginner", problems: 0, reached: true, current: false },
-  { milestone: "Learning", problems: 25, reached: true, current: false },
-  { milestone: "Practicing", problems: 50, reached: true, current: true },
-  { milestone: "Almost Ready", problems: 100, reached: false, current: false },
-  { milestone: "Ready", problems: 150, reached: false, current: false },
-  { milestone: "Beyond Ready", problems: 200, reached: false, current: false },
-];
+export interface InterviewProgressSectionProps {
+  mutate?: () => void;
+}
 
-export function InterviewProgressSection() {
-  const currentProblems = 64;
-  const nextMilestone = progressData.find((m) => !m.reached);
+export function InterviewProgressSection({
+  mutate: externalMutate,
+}: InterviewProgressSectionProps = {}) {
+  const { problems, isLoading, mutate } = useTracker();
+
+  // If an external mutate is provided, use it for refreshes (for future extensibility)
+  useEffect(() => {
+    if (externalMutate) {
+      // Optionally, could listen to changes and trigger mutate
+    }
+  }, [externalMutate]);
+
+  // Count solved problems (case-insensitive, matches 'Solved' or 'Completed')
+  const solvedCount = problems.filter(
+    (item) =>
+      typeof item.userProblem.status === "string" &&
+      ["solved", "completed"].includes(
+        item.userProblem.status.trim().toLowerCase()
+      )
+  ).length;
+  const currentProblems = isLoading ? 0 : solvedCount;
+
+  // Determine milestone progress
+  const progressData = [
+    { milestone: "Beginner", problems: 0 },
+    { milestone: "Learning", problems: 25 },
+    { milestone: "Practicing", problems: 50 },
+    { milestone: "Almost Ready", problems: 100 },
+    { milestone: "Ready", problems: 150 },
+    { milestone: "Beyond Ready", problems: 200 },
+  ];
+  const nextMilestone = progressData.find((m) => currentProblems < m.problems);
   const problemsToNext = nextMilestone
     ? nextMilestone.problems - currentProblems
     : 0;
@@ -41,7 +66,7 @@ export function InterviewProgressSection() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-3xl font-bold text-blue-600">
-                {currentProblems}
+                {isLoading ? "..." : currentProblems}
               </div>
               <div className="text-sm text-muted-foreground">
                 Problems Solved
@@ -64,12 +89,10 @@ export function InterviewProgressSection() {
             <div className="absolute top-6 left-0 right-0 h-0.5 bg-gray-200"></div>
             <div className="flex justify-between items-center relative">
               {progressData.map((milestone, index) => {
-                const isReached =
-                  milestone.reached || currentProblems >= milestone.problems;
+                const isReached = currentProblems >= milestone.problems;
                 const isCurrent =
                   !isReached &&
                   (index === 0 ||
-                    progressData[index - 1].reached ||
                     currentProblems >= progressData[index - 1].problems);
 
                 return (

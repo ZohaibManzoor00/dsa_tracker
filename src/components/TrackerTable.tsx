@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useTracker } from "@/hooks/use-tracker";
+import type { ProblemWithUserData, Problem } from "@/hooks/use-tracker";
 import {
   Card,
   CardContent,
@@ -68,34 +69,21 @@ import {
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@clerk/nextjs";
+import { neetcodeProblems } from "@/lib/neetcode-problems";
+import { CuratedProblem } from "@/lib/neetcode-problems";
 
-interface Problem {
-  id: string;
-  title: string;
-  difficulty: string;
-  topic: string;
-  url: string;
-  description: string;
-  examples: any[];
-  constraints: string[];
-  starterCode: string;
-  slug: string;
+// Helper function to decode HTML entities
+function decodeHTMLEntities(text: string): string {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = text;
+  return textarea.value;
 }
 
-interface UserProblem {
-  id: string;
-  problemId: string;
-  userId: string;
-  status: string;
-  lastAttempt: string | null;
-  notes: string | null;
-  code: string | null;
-  rating: number | null;
-}
-
-interface ProblemWithUserData {
-  problem: Problem;
-  userProblem: UserProblem;
+interface Example {
+  input: string;
+  output: string;
+  explanation: string;
 }
 
 const STATUS_OPTIONS = [
@@ -117,6 +105,15 @@ function formatStatus(status: string) {
       /\w\S*/g,
       (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase()
     );
+}
+
+// Helper to ensure constraints is always a string[]
+function normalizeConstraints(
+  constraints: string | string[] | undefined
+): string[] {
+  if (!constraints) return [];
+  if (Array.isArray(constraints)) return constraints;
+  return [constraints];
 }
 
 export function TrackerTable() {
@@ -145,6 +142,10 @@ export function TrackerTable() {
     value: Date | undefined;
   } | null>(null);
   const [editingStatus, setEditingStatus] = useState<string | null>(null);
+  const [loadingMap, setLoadingMap] = useState<{ [url: string]: boolean }>({});
+  const [bulkLoading, setBulkLoading] = useState<{ [key: string]: boolean }>(
+    {}
+  );
 
   const filteredProblems = (problems as ProblemWithUserData[]).filter(
     (item: ProblemWithUserData) => {
@@ -416,6 +417,158 @@ export function TrackerTable() {
     setGroupBy(value);
   };
 
+  const handleAddProblem = async (problem: CuratedProblem) => {
+    try {
+      startTransition(() => {
+        mutate((current: ProblemWithUserData[] | undefined) => {
+          if (!current) return [];
+          return [
+            ...current,
+            {
+              problem: {
+                id: problem.slug, // Use slug as id for optimistic update
+                title: problem.title,
+                difficulty: problem.difficulty,
+                topic: problem.topic,
+                url:
+                  problem.url ||
+                  `https://leetcode.com/problems/${problem.slug}/`,
+                slug: problem.slug,
+                description: "",
+                examples: [],
+                constraints: normalizeConstraints([]), // Always a string[]
+                starterCode: "",
+              },
+              userProblem: {
+                id: "optimistic-" + problem.slug,
+                problemId: problem.slug,
+                userId: "optimistic",
+                status: "Not Started",
+                lastAttempt: null,
+                notes: null,
+                code: null,
+                rating: null,
+              },
+            },
+          ];
+        }, false);
+      });
+
+      // Fetch and save logic as before...
+      const leetcodeResponse = await fetch("/api/leetcode", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ titleSlug: problem.slug }),
+      });
+
+      if (!leetcodeResponse.ok) {
+        const errorText = await leetcodeResponse.text();
+        throw new Error(
+          `Failed to fetch problem details from LeetCode: ${errorText}`
+        );
+      }
+
+      const leetcodeData = await leetcodeResponse.json();
+      if (!leetcodeData) {
+        throw new Error("No data received from LeetCode API");
+      }
+
+      const description = leetcodeData.content
+        .replace(/<[^>]*>/g, "")
+        .replace(/Example\s*\d*:[\s\S]*?(?=Constraints:|$)/gi, "")
+        .replace(/Constraints:[\s\S]*$/gi, "")
+        .replace(/\n\s*\n/g, "\n\n")
+        .replace(/&nbsp;/g, " ")
+        .trim();
+
+      const examples: Example[] = [];
+      if (leetcodeData.exampleTestcases) {
+        const testCases = leetcodeData.exampleTestcases.split("\n");
+        for (let i = 0; i < testCases.length; i += 2) {
+          if (i + 1 < testCases.length) {
+            examples.push({
+              input: decodeHTMLEntities(testCases[i]),
+              output: decodeHTMLEntities(testCases[i + 1]),
+              explanation: "",
+            });
+          }
+        }
+      }
+
+      const constraintsMatch = leetcodeData.content.match(
+        /<p><strong>Constraints:<\/strong><\/p>\s*<ul>([\s\S]*?)<\/ul>/
+      );
+      const constraints = constraintsMatch
+        ? constraintsMatch[1]
+            .replace(/<[^>]*>/g, "")
+            .split("\n")
+            .map((c: string) => decodeHTMLEntities(c.trim()))
+            .filter((c: string) => c.length > 0)
+        : [];
+
+      const topic = leetcodeData.topicTags[0]?.name || "Unknown";
+
+      const problemToSave = {
+        title: leetcodeData.title,
+        slug: leetcodeData.titleSlug,
+        difficulty: leetcodeData.difficulty,
+        topic: topic,
+        url: `https://leetcode.com/problems/${leetcodeData.titleSlug}/`,
+        description: description,
+        examples: examples,
+        constraints: normalizeConstraints(constraints), // Always a string[]
+        starterCode:
+          leetcodeData.codeSnippets.find(
+            (snippet: { langSlug: string; code: string }) =>
+              snippet.langSlug === "typescript"
+          )?.code || "",
+      };
+
+      const response = await fetch("/api/problems", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(problemToSave),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+
+      mutate();
+    } catch (error) {
+      toast.error("Failed to add problem", {
+        description:
+          error instanceof Error ? error.message : "Unknown error occurred",
+        duration: 4000,
+      });
+    }
+  };
+
+  // Add this helper to remove a problem by slug
+  const handleRemoveProblem = async (slug: string) => {
+    try {
+      // Optimistically remove from UI
+      mutate((current: ProblemWithUserData[] | undefined) => {
+        if (!current) return [];
+        return current.filter((p) => p.problem.slug !== slug);
+      }, false);
+      // Remove from backend
+      await fetch(`/api/problems/${slug}`, {
+        method: "DELETE",
+      });
+      mutate();
+    } catch (error) {
+      toast.error("Failed to remove problem", {
+        description:
+          error instanceof Error ? error.message : "Unknown error occurred",
+        duration: 4000,
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -612,7 +765,11 @@ export function TrackerTable() {
                 {groupBy !== "none" && (
                   <div className="flex items-center gap-2 mb-3">
                     <Group className="w-4 h-4 text-gray-500" />
-                    <h3 className="font-semibold text-gray-900">{groupName}</h3>
+                    <h3 className="font-semibold text-gray-900">
+                      {groupBy === "status"
+                        ? formatStatus(groupName)
+                        : groupName}
+                    </h3>
                     <Badge variant="secondary" className="text-xs">
                       {problems.length} problems
                     </Badge>
@@ -847,134 +1004,283 @@ export function TrackerTable() {
       </TabsContent>
 
       {/* Curated Lists Tabs */}
-      {["blind75", "neetcode150", "grind75"].map((listKey) => (
-        <TabsContent key={listKey} value={listKey} className="space-y-6">
-          <Card className="border-0 shadow-lg">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5" />
-                {listKey === "blind75"
-                  ? "Blind 75"
-                  : listKey === "neetcode150"
-                  ? "NeetCode 150"
-                  : "Grind 75"}
-              </CardTitle>
-              <CardDescription>
-                {listKey === "blind75" &&
-                  "Essential 75 problems for technical interviews"}
-                {listKey === "neetcode150" &&
-                  "Comprehensive 150 problems covering all important patterns"}
-                {listKey === "grind75" &&
-                  "Curated list of 75 problems for interview preparation"}
-              </CardDescription>
+      {(
+        ["blind75", "neetcode150", "grind75"] as (keyof typeof curatedLists)[]
+      ).map((listKey) => {
+        const curatedProblems = curatedLists[listKey];
+        // Find problems in user's bank
+        const userSlugs = new Set(
+          (problems as ProblemWithUserData[]).map((p) => p.problem.slug)
+        );
+        // Problems not in user's bank
+        const notAdded = curatedProblems.filter(
+          (p) => !userSlugs.has((p as any).slug || (p as any).id)
+        );
+        // Problems in user's bank
+        const added = curatedProblems.filter((p) =>
+          userSlugs.has((p as any).slug || (p as any).id)
+        );
 
-              {/* Filter Controls for curated lists */}
-              <div className="flex flex-col md:flex-row gap-4 pt-4 border-t">
-                <div className="flex-1">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder="Search problems..."
-                      className="pl-10"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                    />
+        const handleAddAll = async () => {
+          setBulkLoading((prev) => ({ ...prev, [listKey]: true }));
+          for (const p of notAdded) {
+            const normalizedProblem = {
+              slug: (p as any).slug || (p as any).id,
+              title: p.title,
+              difficulty: ["Easy", "Medium", "Hard"].includes(p.difficulty)
+                ? (p.difficulty as "Easy" | "Medium" | "Hard")
+                : "Medium",
+              topic: p.topic,
+              url: p.url,
+            } as CuratedProblem;
+            await handleAddProblem(normalizedProblem);
+          }
+          setBulkLoading((prev) => ({ ...prev, [listKey]: false }));
+        };
+
+        const handleRemoveAll = async () => {
+          setBulkLoading((prev) => ({ ...prev, [listKey]: true }));
+          for (const p of added) {
+            const slug = (p as any).slug || (p as any).id;
+            await handleRemoveProblem(slug);
+          }
+          setBulkLoading((prev) => ({ ...prev, [listKey]: false }));
+        };
+
+        return (
+          <TabsContent key={listKey} value={listKey} className="space-y-6">
+            <Card className="border-0 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BookOpen className="w-5 h-5" />
+                  {listKey === "blind75"
+                    ? "Blind 75"
+                    : listKey === "neetcode150"
+                    ? "NeetCode 150"
+                    : "Grind 75"}
+                </CardTitle>
+                <CardDescription>
+                  {listKey === "blind75" &&
+                    "Essential 75 problems for technical interviews"}
+                  {listKey === "neetcode150" &&
+                    "Comprehensive 150 problems covering all important patterns"}
+                  {listKey === "grind75" &&
+                    "Curated list of 75 problems for interview preparation"}
+                </CardDescription>
+                {/* Bulk action buttons */}
+                <div className="flex gap-2 pt-4">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleAddAll}
+                    disabled={bulkLoading[listKey] || notAdded.length === 0}
+                  >
+                    {bulkLoading[listKey]
+                      ? "Adding..."
+                      : `Add All (${notAdded.length})`}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleRemoveAll}
+                    disabled={bulkLoading[listKey] || added.length === 0}
+                  >
+                    {bulkLoading[listKey]
+                      ? "Removing..."
+                      : `Remove All (${added.length})`}
+                  </Button>
+                </div>
+                {/* Filter Controls for curated lists (reuse existing) */}
+                <div className="flex flex-col md:flex-row gap-4 pt-4 border-t">
+                  <div className="flex-1">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                      <Input
+                        placeholder="Search problems..."
+                        className="pl-10"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Select
+                      value={difficultyFilter}
+                      onValueChange={setDifficultyFilter}
+                    >
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Levels</SelectItem>
+                        <SelectItem value="Easy">Easy</SelectItem>
+                        <SelectItem value="Medium">Medium</SelectItem>
+                        <SelectItem value="Hard">Hard</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select value={topicFilter} onValueChange={setTopicFilter}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Topics</SelectItem>
+                        <SelectItem value="Array">Array</SelectItem>
+                        <SelectItem value="String">String</SelectItem>
+                        <SelectItem value="Linked List">Linked List</SelectItem>
+                        <SelectItem value="Tree">Tree</SelectItem>
+                        <SelectItem value="Stack">Stack</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <Select
-                    value={difficultyFilter}
-                    onValueChange={setDifficultyFilter}
-                  >
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Levels</SelectItem>
-                      <SelectItem value="Easy">Easy</SelectItem>
-                      <SelectItem value="Medium">Medium</SelectItem>
-                      <SelectItem value="Hard">Hard</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={topicFilter} onValueChange={setTopicFilter}>
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Topics</SelectItem>
-                      <SelectItem value="Array">Array</SelectItem>
-                      <SelectItem value="String">String</SelectItem>
-                      <SelectItem value="Linked List">Linked List</SelectItem>
-                      <SelectItem value="Tree">Tree</SelectItem>
-                      <SelectItem value="Stack">Stack</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Problem</TableHead>
-                      <TableHead>Difficulty</TableHead>
-                      <TableHead>Topic</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredProblems.map((item: ProblemWithUserData) => (
-                      <TableRow
-                        key={item.problem.id}
-                        className="hover:bg-gray-50"
-                      >
-                        <TableCell className="font-medium">
-                          {item.problem.title}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={getDifficultyColor(
-                              item.problem.difficulty
-                            )}
-                          >
-                            {item.problem.difficulty}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={getTopicColor(item.problem.topic)}
-                          >
-                            {item.problem.topic}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={getStatusColor(item.userProblem.status)}
-                          >
-                            {formatStatus(item.userProblem.status)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => handleProblemClick(item, e)}
-                          >
-                            Edit
-                          </Button>
-                        </TableCell>
+              </CardHeader>
+              <CardContent>
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Problem</TableHead>
+                        <TableHead>Difficulty</TableHead>
+                        <TableHead>Topic</TableHead>
+                        <TableHead>Action</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      ))}
+                    </TableHeader>
+                    <TableBody>
+                      {(
+                        curatedProblems as Array<{
+                          id: string;
+                          title: string;
+                          difficulty: string;
+                          topic: string;
+                          url: string;
+                        }>
+                      )
+                        .filter(
+                          (p) =>
+                            (difficultyFilter === "all" ||
+                              p.difficulty === difficultyFilter) &&
+                            (topicFilter === "all" ||
+                              p.topic === topicFilter) &&
+                            (searchTerm === "" ||
+                              p.title
+                                .toLowerCase()
+                                .includes(searchTerm.toLowerCase()))
+                        )
+                        .map((problem) => {
+                          const inUserList = problems.some(
+                            (userP) =>
+                              userP.problem.url === problem.url ||
+                              userP.problem.id === problem.id
+                          );
+                          const loading = !!loadingMap[problem.url];
+                          const handleAdd = async () => {
+                            setLoadingMap((prev) => ({
+                              ...prev,
+                              [problem.url]: true,
+                            }));
+                            // Normalize the curated problem object
+                            const normalizedProblem = {
+                              slug:
+                                (problem as any).slug || (problem as any).id,
+                              title: problem.title,
+                              difficulty: ["Easy", "Medium", "Hard"].includes(
+                                problem.difficulty
+                              )
+                                ? (problem.difficulty as
+                                    | "Easy"
+                                    | "Medium"
+                                    | "Hard")
+                                : "Medium",
+                              topic: problem.topic,
+                              url: problem.url,
+                            } as CuratedProblem;
+                            await handleAddProblem(normalizedProblem);
+                            setLoadingMap((prev) => ({
+                              ...prev,
+                              [problem.url]: false,
+                            }));
+                          };
+                          const handleRemove = async () => {
+                            setLoadingMap((prev) => ({
+                              ...prev,
+                              [problem.url]: true,
+                            }));
+                            startTransition(() => {
+                              mutate((current) => {
+                                // Optimistically remove the problem from the user's list
+                                if (!current) return current;
+                                return current.filter(
+                                  (userP) =>
+                                    userP.problem.url !== problem.url &&
+                                    userP.problem.id !== problem.id
+                                );
+                              }, false);
+                            });
+                            await fetch(`/api/problems/remove`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ url: problem.url }),
+                            });
+                            mutate();
+                            setLoadingMap((prev) => ({
+                              ...prev,
+                              [problem.url]: false,
+                            }));
+                          };
+                          return (
+                            <TableRow key={problem.id}>
+                              <TableCell className="font-medium">
+                                {problem.title}
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  className={getDifficultyColor(
+                                    problem.difficulty
+                                  )}
+                                >
+                                  {problem.difficulty}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge
+                                  variant="outline"
+                                  className={getTopicColor(problem.topic)}
+                                >
+                                  {problem.topic}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {inUserList ? (
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={handleRemove}
+                                    disabled={loading}
+                                  >
+                                    {loading ? "Removing..." : "Remove"}
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleAdd}
+                                    disabled={loading}
+                                  >
+                                    {loading ? "Adding..." : "Add"}
+                                  </Button>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        );
+      })}
 
       {/* Add Problem Modal */}
       <AddProblemModal

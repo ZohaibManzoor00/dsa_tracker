@@ -44,7 +44,7 @@ export async function PUT(
   request: Request,
   context: { params: { slug: string } }
 ) {
-  const { params } = context;
+  const { slug } = context.params;
   try {
     const { userId } = await auth();
     if (!userId) {
@@ -58,7 +58,7 @@ export async function PUT(
     const [problem] = await db
       .select()
       .from(problems)
-      .where(eq(problems.slug, params.slug))
+      .where(eq(problems.slug, slug))
       .limit(1);
 
     if (!problem) {

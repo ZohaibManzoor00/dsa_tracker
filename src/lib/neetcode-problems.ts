@@ -3,6 +3,7 @@ export interface CuratedProblem {
   title: string;
   difficulty: "Easy" | "Medium" | "Hard";
   topic: string;
+  url?: string;
 }
 
 export const neetcodeProblems: CuratedProblem[] = [

@@ -16,6 +16,7 @@ import { AddProblemDialog } from "./AddProblemDialog";
 import { Sheet } from "./ui/sheet";
 import { ProblemDetailSheet } from "./ProblemDetailSheet";
 import { TrackerTable } from "./TrackerTable";
+import { mutate } from "swr";
 
 const mockSessions = [
   {
@@ -135,9 +136,18 @@ export function DSATracker() {
             problem={selectedProblem}
             onSave={handleSaveProblem}
             onClose={handleCloseSheet}
+            mutate={mutate}
           />
         )}
       </Sheet>
+
+      <footer className="bg-background border-t h-16 mt-20">
+        <div className="container mx-auto px-4 py-2">
+          <p className="text-sm text-muted-foreground">
+            DSA Tracker v1.0.0
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
