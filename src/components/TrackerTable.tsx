@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
+import { toast } from "sonner";
 
 interface Problem {
   id: string;
@@ -522,8 +523,22 @@ export function TrackerTable() {
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancel</AlertDialogCancel>
                       <AlertDialogAction
-                        onClick={() => {
-                          // TODO: Implement clear progress functionality
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(
+                              "/api/user/clear-progress",
+                              { method: "DELETE" }
+                            );
+                            if (!res.ok) {
+                              const text = await res.text();
+                              toast.error(text || "Failed to clear progress");
+                            } else {
+                              toast.success("Progress cleared");
+                              mutate();
+                            }
+                          } catch (err) {
+                            toast.error("Failed to clear progress");
+                          }
                           setIsClearModalOpen(false);
                         }}
                         className="bg-red-600 hover:bg-red-700"
@@ -765,7 +780,7 @@ export function TrackerTable() {
                                   </>
                                 ) : (
                                   <span className="text-sm text-gray-400">
-                                    Click to rate
+                                    Click
                                   </span>
                                 )}
                               </div>
@@ -800,7 +815,7 @@ export function TrackerTable() {
                                       ? new Date(
                                           item.userProblem.lastAttempt
                                         ).toLocaleDateString()
-                                      : "Click to set date"}
+                                      : "Click"}
                                   </div>
                                 </PopoverTrigger>
                                 <PopoverContent
